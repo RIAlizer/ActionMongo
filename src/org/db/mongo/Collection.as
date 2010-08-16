@@ -42,10 +42,10 @@ package org.db.mongo
 			this.collName = collName;
 		}
 		
-		public function find( query : Object, returnFieldSelector : Object = null ) : Cursor {
+		public function find( query : Object, returnFieldSelector : Object = null, readAll : Function = null ) : Cursor {
 			var queryID : int = mongo.getUniqueID();
 			var opquery : OpQuery = new OpQuery( queryID, 0, dbName + "." + collName, 0, 0, query, returnFieldSelector );
-			var cursor : Cursor = new Cursor( dbName, collName, opquery, queryID );
+			var cursor : Cursor = new Cursor( dbName, collName, opquery, queryID, readAll );
 				
 			var socket : Socket = new Socket();
 			socket.addEventListener( Event.CONNECT, cursor.sendQuery );

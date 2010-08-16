@@ -45,15 +45,17 @@ package org.db.mongo
 		private var query : OpQuery;
 		private var queryID : int;
 		private var cursorID : Int64;
+		private var readAll : Function;
 		
 		public var documents : Array;
 		
-		public function Cursor( dbName : String, collName : String, query : OpQuery, queryID : int ) {
+		public function Cursor( dbName : String, collName : String, query : OpQuery, queryID : int, readAll : Function = null ) {
 			this.mongo = mongo;
 			this.dbName = dbName;
 			this.collName = collName;
 			this.query = query;
 			this.queryID = queryID;
+			this.readAll = readAll;
 			documents = new Array();
 		}
 		
@@ -109,6 +111,10 @@ package org.db.mongo
 				socket.writeBytes( new OpGetMore( queryID, dbName+"."+collName, 0, response.cursorID ).toBinaryMsg() );
 			} else {
 				socket.close();
+				// run a user-defined callback
+				if( readAll != null ) {
+					readAll();
+				}
 			}
 		}
 
