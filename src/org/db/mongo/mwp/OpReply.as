@@ -37,8 +37,10 @@ package org.db.mongo.mwp
 		public static const ShardConfigStale : int = 4; // ignore
 		public static const AwaitCapable : int = 8;
 		
-		
+		public var messageLength : int = -1; // unparsed object
+		public var requestID : int;
 		public var responseTo : int;
+		public var opCode : int;
 		public var responseFlags : int;
 		public var cursorID : Int64;
 		public var startingFrom : int;
@@ -47,6 +49,7 @@ package org.db.mongo.mwp
 		
 		public function OpReply() {
 			documents = new Array();
+			messageLength = -1;
 		}
 		
 		public function queryFailed() : Boolean {

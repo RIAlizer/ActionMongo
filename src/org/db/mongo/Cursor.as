@@ -44,10 +44,11 @@ package org.db.mongo
 		private var collName : String;
 		private var query : OpQuery;
 		private var queryID : int;
-		private var cursorID : Int64;
 		private var readAll : Function;
 		
-		public var documents : Array;
+		private var parseLock : Boolean = false;
+		private var currentReply : OpReply = null;
+		public var replies : Array = new Array();
 		
 		public function Cursor( dbName : String, collName : String, query : OpQuery, queryID : int, readAll : Function = null ) {
 			this.mongo = mongo;
@@ -56,7 +57,6 @@ package org.db.mongo
 			this.query = query;
 			this.queryID = queryID;
 			this.readAll = readAll;
-			documents = new Array();
 		}
 		
 		
@@ -76,45 +76,85 @@ package org.db.mongo
 		 * @brief Read a response from the socket and extend the list of documents in the cursor
 		 * @param event Event generated for ProgressEvent.SOCKET_DATA
 		 */
-		private function parseReply( event : Event ) : void {
-			var socket : Socket = event.target as Socket;
-			socket.endian = Endian.LITTLE_ENDIAN;
-			var response : OpReply = new OpReply();
-			
-			// read header
-			var messageLength : int = socket.readInt();
-			var requestID : int = socket.readInt();
-			response.responseTo = socket.readInt();
-			var opCode : int = socket.readInt();
-			
-			// read body
-			response.responseFlags = socket.readInt();
-			var cursorID : ByteArray = new ByteArray(); 
-			socket.readBytes( cursorID, 0, 8 );
-			response.cursorID = new Int64( cursorID );
-			response.startingFrom = socket.readInt();
-			response.numberReturned = socket.readInt();
-			// read all the documents contained in the response
-			for( var o : int = 0; o < response.numberReturned; ++o ) {
-				var len : int = socket.readInt();
-				var obj : ByteArray = new ByteArray();
-				obj.endian = Endian.LITTLE_ENDIAN;
-				obj.writeInt( len );
-				socket.readBytes( obj, 4, len-4 );
-				obj.position = 0;
-				var doc : Object = BSON.decode( obj );
-				documents.push( doc );
+		private function parseReply( event : ProgressEvent ) : void {
+			// make sure no other event is reading
+			trace( "data received: " + event.bytesLoaded );
+			if( parseLock ) {
+				trace( "locked: exiting" );
+				return;
 			}
 			
-			// if there are more results, fetch them
-			if( Int64.cmp( response.cursorID, Int64.ZERO ) != 0 ) {
-				socket.writeBytes( new OpGetMore( queryID, dbName+"."+collName, 0, response.cursorID ).toBinaryMsg() );
-			} else {
-				socket.close();
-				// run a user-defined callback
-				if( readAll != null ) {
-					readAll();
+			if( currentReply == null ) {
+				currentReply = new OpReply;
+			}
+			
+			var socket : Socket = event.target as Socket;
+			socket.endian = Endian.LITTLE_ENDIAN;
+			trace( "socket ready" );
+			
+			// retrieve the message length
+			if( currentReply.messageLength == -1 ) {
+				trace( "trying to determine message size" );
+				if( socket.bytesAvailable >= 4 ) {
+					currentReply.messageLength = socket.readInt();
+					trace( "length is: " + currentReply.messageLength );
+				} else {
+					trace( "message parts missing..." + currentReply.messageLength );
+					// message wasn't retrieved entirely
+					socket.addEventListener( ProgressEvent.SOCKET_DATA, parseReply );
+					return;
 				}
+			}
+			
+			trace( "bytes available: " + socket.bytesAvailable );
+			// parse the message once all the data arrived
+			if( socket.bytesAvailable + 4 >= currentReply.messageLength ) {
+				// prevent other events from reading from this socket
+				parseLock = true;
+				trace( "lock obtained: parsing" );
+				
+				currentReply.requestID = socket.readInt();
+				currentReply.responseTo = socket.readInt();
+				currentReply.opCode = socket.readInt();
+				currentReply.responseFlags = socket.readInt();
+				var cursorIDBuffer : ByteArray = new ByteArray(); 
+				socket.readBytes( cursorIDBuffer, 0, 8 );
+				currentReply.cursorID = new Int64( cursorIDBuffer );
+				currentReply.startingFrom = socket.readInt();
+				currentReply.numberReturned = socket.readInt();
+				
+				var docsRead : int = 0;
+				while( docsRead <  currentReply.numberReturned ) {
+					var docSize : int = socket.readInt();
+					var obj : ByteArray = new ByteArray();
+					obj.endian = Endian.LITTLE_ENDIAN;
+					obj.writeInt( docSize );
+					socket.readBytes( obj, 4, docSize - 4 );
+					obj.position = 0;
+					var doc : Object = BSON.decode( obj );
+					currentReply.documents.push( doc );
+					++docsRead;
+				}
+				replies.push( currentReply );
+				
+				trace( "read: " + currentReply.documents.length );
+				trace( Utils.objectToString( currentReply.documents[0]) );
+				// if there are more results, fetch them
+				if( Int64.cmp( currentReply.cursorID, Int64.ZERO ) != 0 ) {
+					socket.addEventListener( ProgressEvent.SOCKET_DATA, parseReply );
+					socket.writeBytes( new OpGetMore( queryID, dbName+"."+collName, 0, currentReply.cursorID ).toBinaryMsg() );
+					socket.flush();
+					trace( "getting more..." );
+				} else {
+					socket.close();
+					// run a user-defined callback
+					trace( "callback" );
+					if( readAll != null ) {
+						readAll();
+					}
+				}
+				parseLock = false;
+				currentReply = null;
 			}
 		}
 
